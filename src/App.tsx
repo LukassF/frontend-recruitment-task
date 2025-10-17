@@ -1,65 +1,121 @@
-import { clsx } from "clsx";
-
-type Todo = {
-  id: number;
-  title: string;
-  completed: boolean;
-};
-
-const API_URL = `http://localhost:3000`;
+import { useApi } from "./hooks/useApi";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Todo, TodoUpdate } from "./types/todo";
+import TodoForm from "./components/TodoForm";
+import TodoList from "./components/TodoList";
+import TodoFooter from "./components/TodoFooter";
 
 export function App() {
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [title, setTitle] = useState("");
+  const { run, loading, error, data } = useApi<Todo[]>();
+
+  const completedItems = useMemo(() => {
+    return todos.filter((todo) => todo.completed);
+  }, [todos]);
+
+  const notCompletedItems = useMemo(() => {
+    return todos.filter((todo) => !todo.completed);
+  }, [todos]);
+
+  useEffect(() => {
+    if (error) {
+      return;
+    }
+
+    if (data?.length) {
+      setTodos(data);
+    }
+  }, [data, error]);
+
+  useEffect(() => {
+    run("/todos", "GET");
+  }, []);
+
+  const addTodo = async (title: string) => {
+    await run(
+      "/todos",
+      "POST",
+      { title },
+      false, // dont show loading state
+    );
+    await run("/todos", "GET");
+  };
+
+  const setTodoCompleted = async (id: number, completed: boolean) => {
+    const todo = todos.find((todo) => todo.id === id);
+    if (!todo) {
+      alert("Todo not found");
+      return;
+    }
+    try {
+      const updated = await run<TodoUpdate>(
+        `/todos/${id}`,
+        "PUT",
+        {
+          title: todo.title,
+          completed,
+        },
+        false, // dont show loading state
+      );
+
+      if (updated) {
+        setTodos((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, completed } : t)),
+        );
+      }
+    } catch (error) {
+      console.error("Failed to update todo:", error);
+    }
+  };
+
+  const deleteCompletedTodos = useCallback(async () => {
+    // it would be better to expose an endpoint on the backend that takes multiple ids in the body so as not to perform multiple requests
+    const promises = completedItems?.map((todo) => {
+      run(
+        `/todos/${todo.id}`,
+        "DELETE",
+        undefined,
+        false, // dont show loading state
+      );
+    });
+    try {
+      await Promise.allSettled(promises);
+      setTodos((prev) => [...prev.filter((todo) => !todo.completed)]);
+    } catch (error) {
+      console.error("Failed to delete todos:", error);
+    }
+  }, [completedItems, run]);
+
   return (
     <div className="mx-auto flex max-w-xl flex-col gap-4 p-4">
-      <div>
-        <input
-          placeholder="What needs to be done?"
-          type="text"
-          className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6"
-        />
-      </div>
+      <TodoForm
+        title={title}
+        onChange={(value) => setTitle(value)}
+        onSubmit={async (event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          if (!title.trim()) {
+            return;
+          }
+
+          await addTodo(title.trim());
+          setTitle("");
+        }}
+      />
 
       <fieldset>
         <legend className="text-base font-semibold leading-6 text-gray-900">
           Todo list
         </legend>
-        <div className="mt-4 divide-y divide-gray-200 border-b border-t border-gray-200">
-          <div
-            data-testid="todo-item"
-            className={clsx(
-              "relative flex items-start py-4",
-              // todo.completed && "line-through",
-            )}
-          >
-            <div className="min-w-0 flex-1 text-sm leading-6">
-              <label
-                className="select-none font-medium text-gray-900"
-                data-testid="todo-title"
-              >
-                Title
-              </label>
-            </div>
-            <div className="ml-3 flex h-6 items-center">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
-              />
-            </div>
-          </div>
-        </div>
+        <TodoList todos={todos} loading={loading} onToggle={setTodoCompleted} />
       </fieldset>
 
-      <div className="flex h-8 items-center justify-between">
-        <span
-          data-testid="todo-count"
-          className="text-sm font-medium leading-6 text-gray-900"
-        >
-          0 items left
-        </span>
-        <button className="rounded-md bg-white px-2.5 py-1.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
-          Clear completed
-        </button>
-      </div>
+      <TodoFooter
+        remainingCount={notCompletedItems.length}
+        completedCount={completedItems.length}
+        loading={loading}
+        onClearCompleted={deleteCompletedTodos}
+      />
     </div>
   );
 }
